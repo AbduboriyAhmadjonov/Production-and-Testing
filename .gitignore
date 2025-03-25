@@ -1,2 +1,9 @@
 node_modules
-nodemon.json
+package-lock.json
+/images/*
+/invoices/*
+access.log
+
+.env
+server.cert
+server.key

@@ -1,13 +1,21 @@
 const path = require('path');
+const fs = require('fs');
+const https = require('https');
 
 const express = require('express');
 const bodyParser = require('body-parser');
 const mongoose = require('mongoose');
 const session = require('express-session');
 const MongoDBStore = require('connect-mongodb-session')(session);
-const csrf = require('csurf');
+const { doubleCsrf: csrf } = require('csrf-csrf');
 const flash = require('connect-flash');
 const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
+const cookieParser = require('cookie-parser');
+
+const helmet = require('helmet');
+const compression = require('compression');
+const morgan = require('morgan');
 
 const errorController = require('./controllers/error');
 const shopController = require('./controllers/shop');
@@ -21,14 +29,25 @@ const store = new MongoDBStore({
   uri: MONGODB_URI,
   collection: 'sessions',
 });
-const csrfProtection = csrf();
 
+// const privateKey = fs.readFileSync('server.key'); // key.pem
+// const certificate = fs.readFileSync('server.cert'); // csr.pem
+
+// Double csrf
+const csrfProtection = csrf({
+  getSecret: () => 'supersecret',
+  getTokenFromRequest: (req) => req.body._csrf,
+  // __HOST and __SECURE are blocked in chrome, change name
+  cookieName: '__APP-psfi.x-csrf-token',
+});
+
+// Multer constants
 const fileStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, 'images');
   },
   filename: (req, file, cb) => {
-    cb(null, new Date().toISOString() + '-' + file.originalname);
+    cb(null, uuidv4() + '-' + file.originalname);
   },
 });
 
@@ -51,6 +70,14 @@ const adminRoutes = require('./routes/admin');
 const shopRoutes = require('./routes/shop');
 const authRoutes = require('./routes/auth');
 
+const accessLogStream = fs.createWriteStream(path.join(__dirname, 'access.log'), {
+  flags: 'a', // Append
+});
+
+app.use(helmet());
+app.use(compression());
+app.use(morgan('combined', { stream: accessLogStream })); // Logging to a file
+
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(multer({ storage: fileStorage, fileFilter: fileFilter }).single('image'));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -64,6 +91,9 @@ app.use(
   })
 );
 
+/* CSRF-CSRF PACKAGE */
+app.use(cookieParser('super-secret'));
+app.use(csrfProtection.doubleCsrfProtection);
 app.use(flash());
 
 app.use((req, res, next) => {
@@ -91,7 +121,6 @@ app.use((req, res, next) => {
 
 app.post('/create-order', isAuth, shopController.postOrder);
 
-app.use(csrfProtection);
 app.use((req, res, next) => {
   res.locals.csrfToken = req.csrfToken();
   next();
@@ -118,6 +147,11 @@ app.use((error, req, res, next) => {
 mongoose
   .connect(MONGODB_URI)
   .then((result) => {
+    /** Using SSL/TLS certificate via openssl (git bash: openssl req -nodes -new -x509 -keyout server.key -out server.cert)
+    https
+      .createServer({ key: privateKey, cert: certificate }, app)
+      .listen(process.env.PORT || 3000);
+     */
     app.listen(process.env.PORT || 3000);
   })
   .catch((err) => {
